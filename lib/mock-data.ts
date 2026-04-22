@@ -4,8 +4,8 @@ import type { DiagnosisResult } from "@/types";
 // v0.2以降: atcoder.ts / leetcode.ts / coach.ts / claude.ts の実装に差し替える
 export function getMockResult(atcoderId: string, leetcodeId: string): DiagnosisResult {
   return {
-    levelLabel: "AtCoder 茶〜緑レベル（標準問題に挑戦中） / LeetCode Easy 偏重（Easy 73%）",
-    levelDescription: `${atcoderId} さんは AtCoder で基礎的なアルゴリズムを着実に習得しています。一方 ${leetcodeId} の LeetCode では Easy 偏重が見られるため、今後は Medium に積極的に挑戦して実力を引き上げていきましょう。特に DP と Graph が今の伸びしろです。`,
+    levelLabel: "データ取得に失敗しました（サンプル表示）",
+    levelDescription: `AtCoder / LeetCode のデータを取得できなかったため、サンプルデータを表示しています。IDが正しいか、プロフィールが公開設定になっているか確認してください。`,
     weaknesses: [
       {
         tag: "dp",
