@@ -57,18 +57,25 @@ export function detectWeaknesses(stats: UserStats): Weakness[] {
   }
 
   // --- LeetCode 弱点分析 ---
-  // Easy 偏重チェック
+  // Easy 偏重チェック（高レーティングユーザーには厳しい判定をしない）
   const { easySolved, mediumSolved, hardSolved, totalSolved } = stats.leetcode;
+  const acRating = stats.atcoder.estimatedRating;
   if (totalSolved > 10) {
     const easyRatio = easySolved / totalSolved;
-    if (easyRatio > 0.7) {
+    if (easyRatio > 0.7 && acRating < 1200) {
       weaknesses.push({
         tag: "Medium問題の経験不足",
         reason: `LeetCode の ${Math.round(easyRatio * 100)}% が Easy です。Medium に挑戦しましょう`,
         priority: "high",
       });
+    } else if (mediumSolved < 5 && totalSolved > 30) {
+      weaknesses.push({
+        tag: "Medium問題の絶対数",
+        reason: "LeetCode Medium の絶対数を増やすとコーディング面接の対応力が上がります",
+        priority: "medium",
+      });
     }
-    if (mediumSolved < 10 && totalSolved > 20) {
+    if (mediumSolved < 10 && totalSolved > 20 && acRating < 1200) {
       weaknesses.push({
         tag: "Medium/Hard の演習量",
         reason: "LeetCode Medium を 10 問以上解くとコーディング面接の基礎が固まります",
@@ -352,11 +359,12 @@ function diffLabel(diff: number): string {
 // AtCoder の推定レーティングから診断ラベルを返す
 export function diagnosisLabel(acRating: number, lcStats: { easySolved: number; mediumSolved: number; totalSolved: number }): string {
   let acLabel = "";
-  if (acRating < 400) acLabel = "AtCoder 灰〜茶レベル（基礎定着中）";
-  else if (acRating < 800) acLabel = "AtCoder 茶レベル（基礎固め中）";
-  else if (acRating < 1200) acLabel = "AtCoder 茶〜緑レベル（標準問題に挑戦中）";
-  else if (acRating < 1600) acLabel = "AtCoder 緑〜水レベル（応用問題対応力あり）";
-  else acLabel = "AtCoder 水〜青レベル（上級者）";
+  if (acRating < 400) acLabel = "AtCoder 灰色レベル（基礎定着中）";
+  else if (acRating < 800) acLabel = "AtCoder 茶色レベル（基礎固め中）";
+  else if (acRating < 1200) acLabel = "AtCoder 緑色レベル（標準問題に挑戦中）";
+  else if (acRating < 1600) acLabel = "AtCoder 水色レベル（応用問題対応力あり）";
+  else if (acRating < 2000) acLabel = "AtCoder 青色レベル（高難度問題に取り組めている）";
+  else acLabel = "AtCoder 黄色以上レベル（上位コーダー）";
 
   const easyRatio =
     lcStats.totalSolved > 0
@@ -364,10 +372,12 @@ export function diagnosisLabel(acRating: number, lcStats: { easySolved: number; 
       : 100;
 
   let lcLabel = "";
-  if (lcStats.totalSolved < 20) lcLabel = "LeetCode 初期段階";
+  if (lcStats.totalSolved === 0) lcLabel = "";
+  else if (lcStats.totalSolved < 20) lcLabel = "LeetCode 初期段階";
+  else if (easyRatio > 70 && acRating >= 1200) lcLabel = `LeetCode ウォームアップ中心（Easy ${easyRatio}%）`;
   else if (easyRatio > 70) lcLabel = `LeetCode Easy 偏重（Easy ${easyRatio}%）`;
   else if (lcStats.mediumSolved > 50) lcLabel = "LeetCode Medium 中級以上";
   else lcLabel = "LeetCode Easy〜Medium 移行期";
 
-  return `${acLabel} / ${lcLabel}`;
+  return lcLabel ? `${acLabel} / ${lcLabel}` : acLabel;
 }

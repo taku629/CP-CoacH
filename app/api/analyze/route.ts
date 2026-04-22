@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AnalyzeRequest, AnalyzeResponse, UserStats, LeetCodeStats, AtCoderSubmission } from "@/types";
-import { fetchAllProblems, fetchProblemModels, fetchUserSubmissions, estimateRating } from "@/lib/atcoder";
+import { fetchAllProblems, fetchProblemModels, fetchUserSubmissions, fetchUserRating, estimateRating } from "@/lib/atcoder";
 import { fetchLeetCodeStats } from "@/lib/leetcode";
 import { detectWeaknesses, selectNextProblems, generateWeeklyPlan, diagnosisLabel } from "@/lib/coach";
 import { generateDiagnosis } from "@/lib/claude";
@@ -15,7 +15,12 @@ const EMPTY_LEETCODE: LeetCodeStats = {
   tagStats: [],
 };
 
-function buildAtCoderStats(submissions: AtCoderSubmission[], problemModels: Record<string, { difficulty?: number }>, problemMap: Map<string, { tags?: string[] }>) {
+function buildAtCoderStats(
+  submissions: AtCoderSubmission[],
+  problemModels: Record<string, { difficulty?: number }>,
+  problemMap: Map<string, { tags?: string[] }>,
+  officialRating: number | null
+) {
   const acDifficulties: number[] = [];
   const tagStats: Record<string, { ac: number; total: number }> = {};
 
@@ -29,7 +34,8 @@ function buildAtCoderStats(submissions: AtCoderSubmission[], problemModels: Reco
     }
   }
 
-  const estimatedRating = estimateRating(acDifficulties);
+  // 公式レートを優先。取得できない場合のみ difficulty 分布から推定
+  const estimatedRating = officialRating ?? estimateRating(acDifficulties);
 
   const diffBands = ["〜400", "400〜800", "800〜1200", "1200〜1600", "1600〜2000", "2000+"];
   const diffDistribution: Record<string, number> = Object.fromEntries(diffBands.map((b) => [b, 0]));
@@ -47,7 +53,7 @@ function buildAtCoderStats(submissions: AtCoderSubmission[], problemModels: Reco
 
 function buildDiagnosisText(
   acCount: number,
-  estimatedRating: number,
+  rating: number,
   topWeakTag: string,
   lc: LeetCodeStats
 ): string {
@@ -56,29 +62,29 @@ function buildDiagnosisText(
   }
   if (acCount === 0) {
     const lcDesc = lc.easySolved / Math.max(lc.totalSolved, 1) > 0.7
-      ? `Easy 偏重（${Math.round(lc.easySolved / lc.totalSolved * 100)}%）なので Medium を増やしたい段階`
-      : "Easy〜Medium バランスよく進めている段階";
-    return `AtCoder のデータは取得できませんでした。LeetCode は ${lc.totalSolved} 問解いており、${lcDesc}です。LeetCode の結果をもとに診断しています。`;
+      ? `Easy 中心に着実に積み上げている段階です。Medium にも挑戦していきましょう`
+      : "Easy〜Medium をバランスよく進めています";
+    return `AtCoder のデータは取得できませんでした。LeetCode は ${lc.totalSolved} 問解いており、${lcDesc}。LeetCode の結果をもとに診断しています。`;
   }
 
   const ratingDesc =
-    estimatedRating < 400 ? "基礎を固めている段階" :
-    estimatedRating < 800 ? "茶色レベルの問題が安定してきた段階" :
-    estimatedRating < 1200 ? "緑色レベルに向かって成長中の段階" :
-    estimatedRating < 1600 ? "水色レベルの応用問題に挑戦できる段階" :
-    "青色以上の高難度問題にも対応できる段階";
+    rating < 400  ? "基礎を固めている段階" :
+    rating < 800  ? "茶色帯の問題が安定してきた段階" :
+    rating < 1200 ? "緑色帯に向かって成長中の段階" :
+    rating < 1600 ? "水色帯として応用問題に対応できている段階" :
+    rating < 2000 ? "青色帯として高難度問題にも取り組めている段階" :
+    "黄色以上の上位コーダーとして活躍している段階";
 
   const lcPart = lc.totalSolved > 0
     ? `LeetCode は ${lc.totalSolved} 問（Easy ${lc.easySolved} / Medium ${lc.mediumSolved} / Hard ${lc.hardSolved}）。${
-        lc.easySolved / lc.totalSolved > 0.7
-          ? "Easy 偏重なので Medium を増やしていきましょう。"
-          : lc.mediumSolved > 50
-          ? "Medium 以上を多数解いており順調です。"
-          : "Easy〜Medium のバランスで進めています。"
+        lc.mediumSolved >= 50 ? "Medium を多数経験しており安定しています。" :
+        lc.mediumSolved >= 20 ? "Medium も着実に積み上げています。" :
+        rating >= 1200 ? "Medium の絶対数を増やすとさらに伸びしろが広がります。" :
+        "Medium にも少しずつ挑戦していきましょう。"
       }`
-    : "LeetCode データは取得できませんでした。";
+    : "";
 
-  return `AtCoder ${acCount} 問、推定レーティング ${estimatedRating}（${ratingDesc}）。${lcPart}特に「${topWeakTag}」の補強が次のステップアップにつながります。`;
+  return `AtCoder ${acCount} 問、レーティング ${rating}（${ratingDesc}）。${lcPart}「${topWeakTag}」をさらに伸ばすと次のステージが見えてきます。`;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeResponse>> {
@@ -101,36 +107,42 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       ]);
 
       // AtCoder / LeetCode のユーザーデータを並列で取得
-      // allSettled で片側失敗でも止まらないようにする
-      const [acSettled, lcSettled] = await Promise.allSettled([
-        fetchUserSubmissions(atcoderId.trim()),
-        fetchLeetCodeStats(leetcodeId.trim()),
+      // 公式レートも同時取得（失敗しても問題ない）
+      const [acSettled, lcSettled, ratingSettled] = await Promise.allSettled([
+        atcoderId?.trim() ? fetchUserSubmissions(atcoderId.trim()) : Promise.reject("no id"),
+        leetcodeId?.trim() ? fetchLeetCodeStats(leetcodeId.trim()) : Promise.reject("no id"),
+        atcoderId?.trim() ? fetchUserRating(atcoderId.trim()) : Promise.resolve(null),
       ]);
 
       const atcoderOk = acSettled.status === "fulfilled";
       const leetcodeOk = lcSettled.status === "fulfilled";
+      const officialRating = ratingSettled.status === "fulfilled" ? ratingSettled.value : null;
 
       if (!atcoderOk && !leetcodeOk) {
-        // 両方失敗 → モックにフォールバック
         console.warn("[analyze] Both APIs failed, falling back to mock");
         return NextResponse.json({
           success: true,
-          data: { ...getMockResult(atcoderId.trim(), leetcodeId.trim()), sources: { atcoder: false, leetcode: false } },
+          data: { ...getMockResult(atcoderId?.trim() ?? "", leetcodeId?.trim() ?? ""), sources: { atcoder: false, leetcode: false } },
         });
       }
 
-      if (!atcoderOk) {
+      if (!atcoderOk && atcoderId?.trim()) {
         console.warn("[analyze] AtCoder API failed:", (acSettled as PromiseRejectedResult).reason);
       }
-      if (!leetcodeOk) {
+      if (!leetcodeOk && leetcodeId?.trim()) {
         console.warn("[analyze] LeetCode API failed:", (lcSettled as PromiseRejectedResult).reason);
       }
+      if (officialRating !== null) {
+        console.info(`[analyze] Official rating for ${atcoderId}: ${officialRating}`);
+      }
 
-      const submissions = atcoderOk ? (acSettled as PromiseFulfilledResult<ReturnType<typeof fetchUserSubmissions> extends Promise<infer T> ? T : never>).value : [];
+      const submissions = atcoderOk ? (acSettled as PromiseFulfilledResult<AtCoderSubmission[]>).value : [];
       const lcStats = leetcodeOk ? (lcSettled as PromiseFulfilledResult<LeetCodeStats>).value : EMPTY_LEETCODE;
 
       const problemMap = new Map(allProblems.map((p) => [p.id, p]));
-      const { tagStats, estimatedRating, diffDistribution } = buildAtCoderStats(submissions, problemModels, problemMap);
+      const { tagStats, estimatedRating, diffDistribution } = buildAtCoderStats(
+        submissions, problemModels, problemMap, officialRating
+      );
 
       const userStats: UserStats = {
         atcoder: {
@@ -155,7 +167,6 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
       const levelLabel = diagnosisLabel(estimatedRating, lcStats);
       const topWeakTag = weaknesses[0]?.tag ?? "dp";
 
-      // Claude API で診断文を生成（失敗時はルールベースにフォールバック）
       const claudeOutput = await generateDiagnosis({ levelLabel, stats: userStats, weaknesses, previousResult });
       const levelDescription = claudeOutput?.diagnosisText ?? buildDiagnosisText(submissions.length, estimatedRating, topWeakTag, lcStats);
       const progressComment = claudeOutput?.progressComment ?? undefined;
@@ -165,11 +176,10 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
         data: { levelLabel, levelDescription, progressComment, weaknesses, nextProblems, weeklyPlan, sources: { atcoder: atcoderOk, leetcode: leetcodeOk } },
       });
     } catch (err) {
-      // fetchAllProblems / fetchProblemModels の失敗 → モックにフォールバック
       console.warn("[analyze] Problem data fetch failed, falling back to mock:", err instanceof Error ? err.message : err);
       return NextResponse.json({
         success: true,
-        data: { ...getMockResult(atcoderId.trim(), leetcodeId.trim()), sources: { atcoder: false, leetcode: false } },
+        data: { ...getMockResult(atcoderId?.trim() ?? "", leetcodeId?.trim() ?? ""), sources: { atcoder: false, leetcode: false } },
       });
     }
   } catch (err) {

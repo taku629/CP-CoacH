@@ -37,7 +37,6 @@ export async function fetchProblemModels(): Promise<Record<string, ProblemModel>
 
 // ユーザーの提出一覧（ACのみ、最新500件）
 export async function fetchUserSubmissions(userId: string): Promise<AtCoderSubmission[]> {
-  // epoch_second=0 で全件取得、実際は最新を優先
   const epochSecond = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 180; // 180日分
   const url = `${BASE}/atcoder-api/v3/user/submissions?user=${encodeURIComponent(userId)}&epoch_second=${epochSecond}`;
   const all = await fetchJSON<AtCoderSubmission[]>(
@@ -45,7 +44,6 @@ export async function fetchUserSubmissions(userId: string): Promise<AtCoderSubmi
     `atcoder:submissions:${userId}`,
     SUBMISSIONS_TTL
   );
-  // ACのみ抽出、重複問題は最初のACだけ残す
   const acMap = new Map<string, AtCoderSubmission>();
   for (const s of all) {
     if (s.result === "AC" && !acMap.has(s.problem_id)) {
@@ -61,6 +59,29 @@ export async function fetchUserAcSet(userId: string): Promise<Set<string>> {
   return new Set(subs.map((s) => s.problem_id));
 }
 
+// AtCoder 公式レートをコンテスト履歴から取得
+// https://atcoder.jp/users/{id}/history.json は公開エンドポイント
+export async function fetchUserRating(userId: string): Promise<number | null> {
+  const cacheKey = `atcoder:rating:${userId}`;
+  const cached = cacheGet<number>(cacheKey);
+  if (cached !== null) return cached;
+
+  try {
+    const res = await fetch(
+      `https://atcoder.jp/users/${encodeURIComponent(userId)}/history.json`,
+      { headers: { "User-Agent": "cp-coach-app/1.0 (educational tool)" } }
+    );
+    if (!res.ok) return null;
+    const history = await res.json() as { NewRating: number }[];
+    if (!Array.isArray(history) || history.length === 0) return null;
+    const rating = history[history.length - 1].NewRating;
+    cacheSet(cacheKey, rating, SUBMISSIONS_TTL);
+    return typeof rating === "number" ? rating : null;
+  } catch {
+    return null;
+  }
+}
+
 // 難易度帯のラベル
 export function difficultyLabel(diff: number): string {
   if (diff < 400) return "灰 (〜400)";
@@ -72,11 +93,11 @@ export function difficultyLabel(diff: number): string {
   return "橙以上 (2400+)";
 }
 
-// AtCoder の難易度からざっくりレーティングを推定
-// ACした問題の難易度の75パーセンタイル付近を「実力の目安」とする
+// 難易度分布から実力推定（公式レートが取得できない場合のフォールバック）
+// 上位15%付近を見ることで、簡単な問題の大量ACによる過小評価を防ぐ
 export function estimateRating(acProblemsWithDifficulty: number[]): number {
   if (acProblemsWithDifficulty.length === 0) return 0;
   const sorted = [...acProblemsWithDifficulty].sort((a, b) => a - b);
-  const idx = Math.floor(sorted.length * 0.75);
+  const idx = Math.floor(sorted.length * 0.85); // 75% → 85% に変更
   return sorted[Math.min(idx, sorted.length - 1)];
 }
