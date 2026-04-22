@@ -28,6 +28,10 @@ export default function CoachPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!atcoderId.trim() && !leetcodeId.trim()) {
+      setError("AtCoder ID か LeetCode ID のどちらかを入力してください");
+      return;
+    }
     setError("");
     setLoading(true);
     setLoadingStep(0);
@@ -86,32 +90,34 @@ export default function CoachPage() {
           <div className="text-center mb-10">
             <h1 className="text-3xl font-extrabold text-indigo-700 tracking-tight">診断スタート</h1>
             <p className="text-gray-500 mt-2 text-sm">
-              AtCoder ID と LeetCode ID を入力してください
+              どちらか一方だけでも分析できます
             </p>
           </div>
 
           <form onSubmit={handleSubmit} className="bg-white rounded-3xl shadow-lg p-8 space-y-5">
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">AtCoder ID</label>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">
+                AtCoder ID <span className="text-gray-400 font-normal">（任意）</span>
+              </label>
               <input
                 type="text"
                 value={atcoderId}
                 onChange={(e) => setAtcoderId(e.target.value)}
                 placeholder="例: tourist"
                 className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                required
                 disabled={loading}
               />
             </div>
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">LeetCode ID</label>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">
+                LeetCode ID <span className="text-gray-400 font-normal">（任意）</span>
+              </label>
               <input
                 type="text"
                 value={leetcodeId}
                 onChange={(e) => setLeetcodeId(e.target.value)}
                 placeholder="例: neal_wu"
                 className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                required
                 disabled={loading}
               />
             </div>

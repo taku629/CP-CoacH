@@ -86,9 +86,9 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeRespon
     const body: AnalyzeRequest = await req.json();
     const { atcoderId, leetcodeId, previousResult, doneProblems } = body;
 
-    if (!atcoderId?.trim() || !leetcodeId?.trim()) {
+    if (!atcoderId?.trim() && !leetcodeId?.trim()) {
       return NextResponse.json(
-        { success: false, error: "AtCoder ID と LeetCode ID を入力してください" },
+        { success: false, error: "AtCoder ID か LeetCode ID のどちらかを入力してください" },
         { status: 400 }
       );
     }
