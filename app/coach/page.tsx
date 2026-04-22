@@ -98,7 +98,7 @@ export default function CoachPage() {
                 value={atcoderId}
                 onChange={(e) => setAtcoderId(e.target.value)}
                 placeholder="例: tourist"
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 required
                 disabled={loading}
               />
@@ -110,7 +110,7 @@ export default function CoachPage() {
                 value={leetcodeId}
                 onChange={(e) => setLeetcodeId(e.target.value)}
                 placeholder="例: neal_wu"
-                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400"
                 required
                 disabled={loading}
               />
