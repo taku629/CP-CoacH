@@ -132,11 +132,23 @@ export interface Task {
 
 export type ProblemStatus = "done" | "skipped";
 
+// Pre-computed AtCoder analysis sent from the browser to the API route.
+// The browser fetches AtCoder data directly (server IPs are blocked by kenkoooo.com).
+export interface AtCoderPrecomputed {
+  atcoderUserStats: UserStats["atcoder"];
+  weaknesses: Weakness[];
+  levelLabel: string;
+  nextProblems: NextProblem[];
+  weeklyPlan: WeeklyPlan;
+  ratingNotFound: boolean; // atcoder.jp history.json returned 404
+}
+
 export interface AnalyzeRequest {
-  atcoderId: string;
-  leetcodeId: string;
+  atcoderId?: string;
+  leetcodeId?: string;
   previousResult?: DiagnosisResult;
   doneProblems?: string[];
+  atcoderPrecomputed?: AtCoderPrecomputed;
 }
 
 export interface AnalyzeResponse {

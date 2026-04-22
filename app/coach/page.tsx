@@ -3,12 +3,26 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { loadHistory, getDoneProblems } from "@/lib/storage";
+import {
+  fetchAllProblems,
+  fetchProblemModels,
+  fetchUserSubmissions,
+  fetchUserRating,
+  buildAtCoderStats,
+} from "@/lib/atcoder-client";
+import { detectWeaknesses, selectNextProblems, generateWeeklyPlan, diagnosisLabel } from "@/lib/coach";
+import type { UserStats, LeetCodeStats, AtCoderPrecomputed } from "@/types";
+
+const EMPTY_LEETCODE: LeetCodeStats = {
+  totalSolved: 0, easySolved: 0, mediumSolved: 0, hardSolved: 0,
+  recentSubmissions: [], tagStats: [],
+};
 
 const LOADING_STEPS = [
   "AtCoder データを取得中...",
+  "弱点を分析中...",
   "LeetCode データを取得中...",
-  "AI で分析中...",
-  "練習プランを生成中...",
+  "AI で診断中...",
 ];
 
 export default function CoachPage() {
@@ -18,13 +32,16 @@ export default function CoachPage() {
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
   const [error, setError] = useState("");
-  const stepRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [ratingWarning, setRatingWarning] = useState("");
+  const stepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    return () => {
-      if (stepRef.current) clearInterval(stepRef.current);
-    };
+    return () => { if (stepTimerRef.current) clearTimeout(stepTimerRef.current); };
   }, []);
+
+  function advanceStep(step: number) {
+    setLoadingStep(step);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,17 +50,77 @@ export default function CoachPage() {
       return;
     }
     setError("");
+    setRatingWarning("");
     setLoading(true);
-    setLoadingStep(0);
-
-    stepRef.current = setInterval(() => {
-      setLoadingStep((s) => Math.min(s + 1, LOADING_STEPS.length - 1));
-    }, 3500);
+    advanceStep(0);
 
     try {
       const history = loadHistory();
       const previousResult = history[0]?.result;
       const doneProblems = getDoneProblems();
+
+      let atcoderPrecomputed: AtCoderPrecomputed | undefined;
+
+      // --- Step 0: AtCoder データをブラウザから直接取得 ---
+      if (atcoderId.trim()) {
+        let ratingNotFound = false;
+
+        try {
+          const [submissions, allProblems, problemModels, ratingResult] = await Promise.all([
+            fetchUserSubmissions(atcoderId.trim()),
+            fetchAllProblems(),
+            fetchProblemModels(),
+            fetchUserRating(atcoderId.trim()),
+          ]);
+
+          if (!ratingResult.ok) {
+            if (ratingResult.reason === "not_found") {
+              // history.json が 404 = ユーザー非公開または存在しない可能性
+              // 提出データは取れているので推定レートで継続し、警告を表示
+              ratingNotFound = true;
+              setRatingWarning("AtCoder の公式レートを取得できませんでした（ユーザーが非公開または存在しない可能性があります）。推定レートを使用しています。");
+            }
+          }
+
+          const officialRating = ratingResult.ok ? ratingResult.rating : null;
+          const problemMap = new Map(allProblems.map((p) => [p.id, p]));
+          const { userStats: atcoderUserStats } = buildAtCoderStats(
+            submissions, problemModels, problemMap, officialRating
+          );
+
+          // --- Step 1: クライアント側で分析 ---
+          advanceStep(1);
+
+          const userStatsWithEmptyLc: UserStats = {
+            atcoder: atcoderUserStats,
+            leetcode: EMPTY_LEETCODE,
+          };
+
+          const problemsWithDiff = allProblems.map((p) => ({
+            ...p,
+            difficulty: problemModels[p.id]?.difficulty ?? p.difficulty,
+          }));
+          const acSet = new Set(submissions.map((s) => s.problem_id));
+          const doneSet = new Set(doneProblems);
+          const weaknesses = detectWeaknesses(userStatsWithEmptyLc);
+          const nextProblems = selectNextProblems(userStatsWithEmptyLc, problemsWithDiff, acSet, weaknesses, doneSet);
+          const weeklyPlan = generateWeeklyPlan(userStatsWithEmptyLc, weaknesses);
+          const label = diagnosisLabel(atcoderUserStats.estimatedRating, EMPTY_LEETCODE);
+
+          atcoderPrecomputed = { atcoderUserStats, weaknesses, levelLabel: label, nextProblems, weeklyPlan, ratingNotFound };
+        } catch (err) {
+          console.warn("[coach] AtCoder fetch failed:", err instanceof Error ? err.message : err);
+          if (!leetcodeId.trim()) {
+            setError("AtCoder のデータ取得に失敗しました。しばらくしてから再試行してください。");
+            return;
+          }
+          // LeetCode が入力されていれば AtCoder なしで続行
+          setRatingWarning("AtCoder のデータ取得に失敗しました。LeetCode のみで分析します。");
+        }
+      }
+
+      // --- Step 2: LeetCode + Claude はサーバー側で処理 ---
+      advanceStep(2);
 
       const res = await fetch("/api/analyze", {
         method: "POST",
@@ -53,8 +130,11 @@ export default function CoachPage() {
           leetcodeId: leetcodeId.trim(),
           previousResult,
           doneProblems,
+          atcoderPrecomputed,
         }),
       });
+
+      advanceStep(3);
       const data = await res.json();
 
       if (!data.success) {
@@ -68,14 +148,12 @@ export default function CoachPage() {
     } catch {
       setError("通信エラーが発生しました。しばらくしてから再試行してください。");
     } finally {
-      if (stepRef.current) clearInterval(stepRef.current);
       setLoading(false);
     }
   }
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-indigo-50 to-white flex flex-col">
-      {/* ナビ */}
       <header className="px-6 py-4 flex items-center justify-between max-w-4xl mx-auto w-full">
         <Link href="/" className="text-indigo-700 font-extrabold text-lg tracking-tight">
           CP Coach
@@ -121,6 +199,10 @@ export default function CoachPage() {
                 disabled={loading}
               />
             </div>
+
+            {ratingWarning && (
+              <p className="text-sm text-amber-600 bg-amber-50 rounded-xl px-4 py-2">{ratingWarning}</p>
+            )}
 
             {error && (
               <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-2">{error}</p>
