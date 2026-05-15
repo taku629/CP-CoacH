@@ -30,8 +30,9 @@ export async function fetchProblemModels(): Promise<Record<string, ProblemModel>
 }
 
 export async function fetchUserSubmissions(userId: string): Promise<AtCoderSubmission[]> {
-  const epochSecond = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 180;
-  const query = `user=${encodeURIComponent(userId)}&epoch_second=${epochSecond}`;
+  // kenkoooo の API は `from_second` を期待する（旧コードの `epoch_second` は400を返す）
+  const fromSecond = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 180;
+  const query = `user=${encodeURIComponent(userId)}&from_second=${fromSecond}`;
   const all = await fetchCached<AtCoderSubmission[]>(
     proxy("/atcoder-api/v3/user/submissions", query),
     300_000

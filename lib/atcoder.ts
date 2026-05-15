@@ -37,8 +37,8 @@ export async function fetchProblemModels(): Promise<Record<string, ProblemModel>
 
 // ユーザーの提出一覧（ACのみ、最新500件）
 export async function fetchUserSubmissions(userId: string): Promise<AtCoderSubmission[]> {
-  const epochSecond = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 180; // 180日分
-  const url = `${BASE}/atcoder-api/v3/user/submissions?user=${encodeURIComponent(userId)}&epoch_second=${epochSecond}`;
+  const fromSecond = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 180; // 180日分
+  const url = `${BASE}/atcoder-api/v3/user/submissions?user=${encodeURIComponent(userId)}&from_second=${fromSecond}`;
   const all = await fetchJSON<AtCoderSubmission[]>(
     url,
     `atcoder:submissions:${userId}`,
