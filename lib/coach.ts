@@ -33,26 +33,32 @@ export function detectWeaknesses(stats: UserStats): Weakness[] {
   const weaknesses: Weakness[] = [];
 
   // --- AtCoder 弱点分析 ---
-  for (const tag of IMPORTANT_TAGS) {
-    const tagStat = stats.atcoder.tagStats[tag];
+  // 提出データが取れていない（kenkoooo.com 障害時など）はAtCoderの弱点判定をスキップ
+  const hasAtCoderData =
+    stats.atcoder.acCount > 0 || Object.keys(stats.atcoder.tagStats).length > 0;
 
-    if (!tagStat || tagStat.ac === 0) {
-      // そのタグを全く解いていない
-      weaknesses.push({
-        tag,
-        reason: `AtCoder で ${tag} の問題をまだ解いていません`,
-        priority: "high",
-      });
-      continue;
-    }
+  if (hasAtCoderData) {
+    for (const tag of IMPORTANT_TAGS) {
+      const tagStat = stats.atcoder.tagStats[tag];
 
-    const acRate = tagStat.ac / tagStat.total;
-    if (acRate < 0.4) {
-      weaknesses.push({
-        tag,
-        reason: `AtCoder の ${tag} のAC率が ${Math.round(acRate * 100)}% と低めです`,
-        priority: acRate < 0.2 ? "high" : "medium",
-      });
+      if (!tagStat || tagStat.ac === 0) {
+        // そのタグを全く解いていない
+        weaknesses.push({
+          tag,
+          reason: `AtCoder で ${tag} の問題をまだ解いていません`,
+          priority: "high",
+        });
+        continue;
+      }
+
+      const acRate = tagStat.ac / tagStat.total;
+      if (acRate < 0.4) {
+        weaknesses.push({
+          tag,
+          reason: `AtCoder の ${tag} のAC率が ${Math.round(acRate * 100)}% と低めです`,
+          priority: acRate < 0.2 ? "high" : "medium",
+        });
+      }
     }
   }
 

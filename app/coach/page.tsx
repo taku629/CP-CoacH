@@ -109,13 +109,47 @@ export default function CoachPage() {
 
           atcoderPrecomputed = { atcoderUserStats, weaknesses, levelLabel: label, nextProblems, weeklyPlan, ratingNotFound };
         } catch (err) {
-          console.warn("[coach] AtCoder fetch failed:", err instanceof Error ? err.message : err);
-          if (!leetcodeId.trim()) {
-            setError("AtCoder のデータ取得に失敗しました。しばらくしてから再試行してください。");
+          console.warn("[coach] AtCoder kenkoooo fetch failed:", err instanceof Error ? err.message : err);
+
+          // フォールバック: kenkoooo は死んでてもレートだけは取れることがある (atcoder.jp 経由)
+          const ratingOnly = await fetchUserRating(atcoderId.trim()).catch(
+            () => ({ ok: false, reason: "error" }) as const
+          );
+
+          if (ratingOnly.ok && ratingOnly.rating !== null) {
+            // レートのみで簡易診断
+            const rating = ratingOnly.rating;
+            setRatingWarning(
+              `AtCoder の問題データは現在取得できませんが、レーティング ${rating}${ratingOnly.provisional ? "（仮）" : ""} を元に診断します。`
+            );
+
+            const ratingOnlyStats: UserStats["atcoder"] = {
+              acCount: 0,
+              difficultyDistribution: {},
+              tagStats: {},
+              estimatedRating: rating,
+            };
+            const userStatsWithEmptyLc: UserStats = { atcoder: ratingOnlyStats, leetcode: EMPTY_LEETCODE };
+            const weaknesses = detectWeaknesses(userStatsWithEmptyLc);
+            const weeklyPlan = generateWeeklyPlan(userStatsWithEmptyLc, weaknesses);
+            const label = diagnosisLabel(rating, EMPTY_LEETCODE);
+
+            atcoderPrecomputed = {
+              atcoderUserStats: ratingOnlyStats,
+              weaknesses,
+              levelLabel: label,
+              nextProblems: [],
+              weeklyPlan,
+              ratingNotFound: ratingOnly.provisional,
+            };
+          } else if (!leetcodeId.trim()) {
+            setError(
+              "AtCoder のデータ取得に失敗しました。AtCoder Problems API（kenkoooo.com）が一時的に応答していません。LeetCode ID も入力して再試行するか、しばらく時間をおいてからお試しください。"
+            );
             return;
+          } else {
+            setRatingWarning("AtCoder のデータ取得に失敗しました。LeetCode のみで分析します。");
           }
-          // LeetCode が入力されていれば AtCoder なしで続行
-          setRatingWarning("AtCoder のデータ取得に失敗しました。LeetCode のみで分析します。");
         }
       }
 

@@ -1,15 +1,16 @@
-// Client-safe AtCoder fetch functions (no next: { revalidate }, no Node.js cache)
-// Called from browser — kenkoooo.com allows browser requests but blocks server IPs.
+// Client-safe AtCoder fetch functions.
+// Uses our Vercel /api/atcoder proxy first (server-side fetch with retry, caches at the edge);
+// the proxy returns 502 if kenkoooo.com itself is unavailable.
 import type { AtCoderSubmission, AtCoderProblem, ProblemModel, UserStats } from "@/types";
 import { estimateRating } from "./atcoder";
-
-const BASE = "https://kenkoooo.com/atcoder";
 
 const memCache = new Map<string, { data: unknown; expiresAt: number }>();
 
 async function fetchCached<T>(url: string, ttlMs: number): Promise<T> {
   const hit = memCache.get(url);
   if (hit && Date.now() < hit.expiresAt) return hit.data as T;
+
+  // プロキシ側で 3 回リトライしているので、クライアントは 1 発勝負
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${url}`);
   const data: T = await res.json();
@@ -17,18 +18,24 @@ async function fetchCached<T>(url: string, ttlMs: number): Promise<T> {
   return data;
 }
 
+const proxy = (path: string, query: string = "") =>
+  `/api/atcoder?path=${encodeURIComponent(path)}${query ? `&q=${encodeURIComponent(query)}` : ""}`;
+
 export async function fetchAllProblems(): Promise<AtCoderProblem[]> {
-  return fetchCached<AtCoderProblem[]>(`${BASE}/resources/merged-problems.json`, 3_600_000);
+  return fetchCached<AtCoderProblem[]>(proxy("/resources/merged-problems.json"), 3_600_000);
 }
 
 export async function fetchProblemModels(): Promise<Record<string, ProblemModel>> {
-  return fetchCached<Record<string, ProblemModel>>(`${BASE}/resources/problem-models.json`, 3_600_000);
+  return fetchCached<Record<string, ProblemModel>>(proxy("/resources/problem-models.json"), 3_600_000);
 }
 
 export async function fetchUserSubmissions(userId: string): Promise<AtCoderSubmission[]> {
   const epochSecond = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 180;
-  const url = `${BASE}/atcoder-api/v3/user/submissions?user=${encodeURIComponent(userId)}&epoch_second=${epochSecond}`;
-  const all = await fetchCached<AtCoderSubmission[]>(url, 300_000);
+  const query = `user=${encodeURIComponent(userId)}&epoch_second=${epochSecond}`;
+  const all = await fetchCached<AtCoderSubmission[]>(
+    proxy("/atcoder-api/v3/user/submissions", query),
+    300_000
+  );
   const acMap = new Map<string, AtCoderSubmission>();
   for (const s of all) {
     if (s.result === "AC" && !acMap.has(s.problem_id)) acMap.set(s.problem_id, s);
@@ -37,20 +44,23 @@ export async function fetchUserSubmissions(userId: string): Promise<AtCoderSubmi
 }
 
 export type RatingResult =
-  | { ok: true; rating: number | null }
+  | { ok: true; rating: number | null; provisional: boolean; contestCount: number }
   | { ok: false; reason: "not_found" | "error" };
 
 export async function fetchUserRating(userId: string): Promise<RatingResult> {
   try {
-    const res = await fetch(
-      `https://atcoder.jp/users/${encodeURIComponent(userId)}/history.json`
-    );
-    if (res.status === 404) return { ok: false, reason: "not_found" };
+    const res = await fetch(`/api/atcoder/rating?user=${encodeURIComponent(userId)}`);
     if (!res.ok) return { ok: false, reason: "error" };
-    const history = (await res.json()) as { NewRating: number }[];
-    if (!Array.isArray(history) || history.length === 0) return { ok: true, rating: null };
-    const rating = history[history.length - 1].NewRating;
-    return { ok: true, rating: typeof rating === "number" ? rating : null };
+    const data = await res.json();
+    if (data.ok === true) {
+      return {
+        ok: true,
+        rating: data.rating ?? null,
+        provisional: Boolean(data.provisional),
+        contestCount: Number(data.contestCount ?? 0),
+      };
+    }
+    return { ok: false, reason: data.reason === "not_found" ? "not_found" : "error" };
   } catch {
     return { ok: false, reason: "error" };
   }
