@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { DiagnosisResult, DiagnosisHistory } from "@/types";
 import { DiagnosisCard } from "@/components/DiagnosisCard";
 import { WeaknessCard } from "@/components/WeaknessCard";
@@ -9,37 +9,128 @@ import { WeeklyPlanCard } from "@/components/WeeklyPlanCard";
 import { ComparisonCard, HistoryPanel } from "@/components/HistoryPanel";
 import { ShareButton } from "@/components/ShareButton";
 import { saveToHistory, loadHistory, clearHistory } from "@/lib/storage";
+import { runAnalysis } from "@/lib/analyze";
 
-export default function ResultPage() {
+const LOADING_STEPS = [
+  "AtCoder データを取得中...",
+  "弱点を分析中...",
+  "LeetCode データを取得中...",
+  "AI で診断中...",
+];
+
+function ResultInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sharedA = (searchParams.get("a") ?? "").trim();
+  const sharedL = (searchParams.get("l") ?? "").trim();
+  const isShared = sharedA !== "" || sharedL !== "";
+
   const [result, setResult] = useState<DiagnosisResult | null>(null);
   const [ids, setIds] = useState<{ atcoderId: string; leetcodeId: string } | null>(null);
   const [history, setHistory] = useState<DiagnosisHistory[]>([]);
   const [prevEntry, setPrevEntry] = useState<DiagnosisHistory | null>(null);
+  const [sharedLoading, setSharedLoading] = useState(isShared);
+  const [sharedStep, setSharedStep] = useState(0);
+  const [sharedError, setSharedError] = useState("");
+  const ranRef = useRef(false);
 
   useEffect(() => {
-    const raw = sessionStorage.getItem("cpcoach_result");
-    const rawIds = sessionStorage.getItem("cpcoach_ids");
-    if (!raw) {
-      router.replace("/");
-      return;
+    if (ranRef.current) return;
+    ranRef.current = true;
+
+    let cancelled = false;
+
+    async function loadShared() {
+      const outcome = await runAnalysis(sharedA, sharedL, {
+        onProgress: (s) => {
+          if (!cancelled) setSharedStep(s);
+        },
+      });
+      if (cancelled) return;
+      if (!outcome.ok) {
+        setSharedError(outcome.error);
+        setSharedLoading(false);
+        return;
+      }
+      setResult(outcome.data);
+      setIds({ atcoderId: sharedA, leetcodeId: sharedL });
+      setSharedLoading(false);
     }
 
-    const parsed: DiagnosisResult = JSON.parse(raw);
-    const parsedIds = rawIds ? JSON.parse(rawIds) : { atcoderId: "", leetcodeId: "" };
+    function loadOwn() {
+      const raw = sessionStorage.getItem("cpcoach_result");
+      const rawIds = sessionStorage.getItem("cpcoach_ids");
+      if (!raw) {
+        router.replace("/");
+        return;
+      }
 
-    // 保存前に「直前の履歴」を取得して比較表示に使う
-    const existing = loadHistory();
-    const latest = existing[0] ?? null;
-    setPrevEntry(latest);
+      const parsed: DiagnosisResult = JSON.parse(raw);
+      const parsedIds = rawIds
+        ? JSON.parse(rawIds)
+        : { atcoderId: "", leetcodeId: "" };
 
-    // 今回の結果を保存
-    const updated = saveToHistory(parsedIds.atcoderId, parsedIds.leetcodeId, parsed);
+      const existing = loadHistory();
+      const latest = existing[0] ?? null;
+      setPrevEntry(latest);
 
-    setResult(parsed);
-    setIds(parsedIds);
-    setHistory(updated);
-  }, [router]);
+      const updated = saveToHistory(parsedIds.atcoderId, parsedIds.leetcodeId, parsed);
+
+      setResult(parsed);
+      setIds(parsedIds);
+      setHistory(updated);
+    }
+
+    if (isShared) {
+      loadShared();
+    } else {
+      loadOwn();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isShared, sharedA, sharedL, router]);
+
+  if (sharedLoading) {
+    const who = sharedA && sharedL ? `@${sharedA} / @${sharedL}` : `@${sharedA || sharedL}`;
+    return (
+      <main className="min-h-screen bg-gradient-to-br from-indigo-50 to-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center space-y-5">
+          <h1 className="text-xl font-bold text-indigo-700">{who} の診断結果を生成中</h1>
+          <p className="text-sm text-gray-500">{LOADING_STEPS[sharedStep]}</p>
+          <div className="flex justify-center gap-1.5">
+            {LOADING_STEPS.map((_, i) => (
+              <span
+                key={i}
+                className={`block w-1.5 h-1.5 rounded-full transition-colors duration-500 ${
+                  i <= sharedStep ? "bg-indigo-500" : "bg-gray-200"
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (sharedError) {
+    return (
+      <main className="min-h-screen bg-gradient-to-br from-indigo-50 to-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center space-y-5">
+          <div className="text-5xl">⚠️</div>
+          <h1 className="text-xl font-bold text-gray-800">診断を取得できませんでした</h1>
+          <p className="text-sm text-gray-500">{sharedError}</p>
+          <button
+            onClick={() => router.push("/coach")}
+            className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-xl hover:bg-indigo-700 transition-colors"
+          >
+            自分のIDで診断する
+          </button>
+        </div>
+      </main>
+    );
+  }
 
   if (!result) return null;
 
@@ -50,9 +141,10 @@ export default function ResultPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-extrabold text-indigo-700">CP Coach</h1>
-            {ids && (
+            {ids && (ids.atcoderId || ids.leetcodeId) && (
               <p className="text-xs text-gray-400 mt-0.5">
-                AtCoder: {ids.atcoderId} / LeetCode: {ids.leetcodeId}
+                {isShared && "共有された診断: "}
+                AtCoder: {ids.atcoderId || "—"} / LeetCode: {ids.leetcodeId || "—"}
               </p>
             )}
           </div>
@@ -60,7 +152,7 @@ export default function ResultPage() {
             onClick={() => router.push("/coach")}
             className="text-sm text-indigo-600 hover:underline"
           >
-            やり直す
+            {isShared ? "自分のIDで診断" : "やり直す"}
           </button>
         </div>
 
@@ -69,13 +161,13 @@ export default function ResultPage() {
         <WeaknessCard weaknesses={result.weaknesses} />
         <NextProblemsCard problems={result.nextProblems} />
         <WeeklyPlanCard plan={result.weeklyPlan} />
-        <ShareButton result={result} />
+        <ShareButton result={result} ids={ids ?? undefined} />
 
-        {/* 前回比較（2回目以降の診断で表示） */}
-        {prevEntry && <ComparisonCard prev={prevEntry} curr={result} />}
+        {/* 前回比較（自分の診断時のみ表示） */}
+        {!isShared && prevEntry && <ComparisonCard prev={prevEntry} curr={result} />}
 
-        {/* 履歴一覧（2件以上保存されていたら表示） */}
-        {history.length >= 2 && (
+        {/* 履歴一覧（自分の診断のみ） */}
+        {!isShared && history.length >= 2 && (
           <HistoryPanel
             history={history}
             onClear={() => {
@@ -108,5 +200,13 @@ export default function ResultPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function ResultPage() {
+  return (
+    <Suspense fallback={null}>
+      <ResultInner />
+    </Suspense>
   );
 }

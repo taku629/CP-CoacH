@@ -1,22 +1,9 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { loadHistory, getDoneProblems } from "@/lib/storage";
-import {
-  fetchAllProblems,
-  fetchProblemModels,
-  fetchUserSubmissions,
-  fetchUserRating,
-  buildAtCoderStats,
-} from "@/lib/atcoder-client";
-import { detectWeaknesses, selectNextProblems, generateWeeklyPlan, diagnosisLabel } from "@/lib/coach";
-import type { UserStats, LeetCodeStats, AtCoderPrecomputed } from "@/types";
-
-const EMPTY_LEETCODE: LeetCodeStats = {
-  totalSolved: 0, easySolved: 0, mediumSolved: 0, hardSolved: 0,
-  recentSubmissions: [], tagStats: [],
-};
+import { runAnalysis } from "@/lib/analyze";
 
 const LOADING_STEPS = [
   "AtCoder データを取得中...",
@@ -33,15 +20,6 @@ export default function CoachPage() {
   const [loadingStep, setLoadingStep] = useState(0);
   const [error, setError] = useState("");
   const [ratingWarning, setRatingWarning] = useState("");
-  const stepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => { if (stepTimerRef.current) clearTimeout(stepTimerRef.current); };
-  }, []);
-
-  function advanceStep(step: number) {
-    setLoadingStep(step);
-  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -52,138 +30,31 @@ export default function CoachPage() {
     setError("");
     setRatingWarning("");
     setLoading(true);
-    advanceStep(0);
+    setLoadingStep(0);
 
-    try {
-      const history = loadHistory();
-      const previousResult = history[0]?.result;
-      const doneProblems = getDoneProblems();
+    const history = loadHistory();
+    const previousResult = history[0]?.result;
+    const doneProblems = getDoneProblems();
 
-      let atcoderPrecomputed: AtCoderPrecomputed | undefined;
+    const outcome = await runAnalysis(atcoderId, leetcodeId, {
+      onProgress: setLoadingStep,
+      onWarning: setRatingWarning,
+      previousResult,
+      doneProblems,
+    });
 
-      // --- Step 0: AtCoder データをブラウザから直接取得 ---
-      if (atcoderId.trim()) {
-        let ratingNotFound = false;
-
-        try {
-          const [submissions, allProblems, problemModels, ratingResult] = await Promise.all([
-            fetchUserSubmissions(atcoderId.trim()),
-            fetchAllProblems(),
-            fetchProblemModels(),
-            fetchUserRating(atcoderId.trim()),
-          ]);
-
-          if (!ratingResult.ok) {
-            if (ratingResult.reason === "not_found") {
-              // history.json が 404 = ユーザー非公開または存在しない可能性
-              // 提出データは取れているので推定レートで継続し、警告を表示
-              ratingNotFound = true;
-              setRatingWarning("AtCoder の公式レートを取得できませんでした（ユーザーが非公開または存在しない可能性があります）。推定レートを使用しています。");
-            }
-          }
-
-          const officialRating = ratingResult.ok ? ratingResult.rating : null;
-          const problemMap = new Map(allProblems.map((p) => [p.id, p]));
-          const { userStats: atcoderUserStats } = buildAtCoderStats(
-            submissions, problemModels, problemMap, officialRating
-          );
-
-          // --- Step 1: クライアント側で分析 ---
-          advanceStep(1);
-
-          const userStatsWithEmptyLc: UserStats = {
-            atcoder: atcoderUserStats,
-            leetcode: EMPTY_LEETCODE,
-          };
-
-          const problemsWithDiff = allProblems.map((p) => ({
-            ...p,
-            difficulty: problemModels[p.id]?.difficulty ?? p.difficulty,
-          }));
-          const acSet = new Set(submissions.map((s) => s.problem_id));
-          const doneSet = new Set(doneProblems);
-          const weaknesses = detectWeaknesses(userStatsWithEmptyLc);
-          const nextProblems = selectNextProblems(userStatsWithEmptyLc, problemsWithDiff, acSet, weaknesses, doneSet);
-          const weeklyPlan = generateWeeklyPlan(userStatsWithEmptyLc, weaknesses);
-          const label = diagnosisLabel(atcoderUserStats.estimatedRating, EMPTY_LEETCODE);
-
-          atcoderPrecomputed = { atcoderUserStats, weaknesses, levelLabel: label, nextProblems, weeklyPlan, ratingNotFound };
-        } catch (err) {
-          console.warn("[coach] AtCoder kenkoooo fetch failed:", err instanceof Error ? err.message : err);
-
-          // フォールバック: kenkoooo は死んでてもレートだけは取れることがある (atcoder.jp 経由)
-          const ratingOnly = await fetchUserRating(atcoderId.trim()).catch(
-            () => ({ ok: false, reason: "error" }) as const
-          );
-
-          if (ratingOnly.ok && ratingOnly.rating !== null) {
-            // レートのみで簡易診断
-            const rating = ratingOnly.rating;
-            setRatingWarning(
-              `AtCoder の問題データは現在取得できませんが、レーティング ${rating}${ratingOnly.provisional ? "（仮）" : ""} を元に診断します。`
-            );
-
-            const ratingOnlyStats: UserStats["atcoder"] = {
-              acCount: 0,
-              difficultyDistribution: {},
-              tagStats: {},
-              estimatedRating: rating,
-            };
-            const userStatsWithEmptyLc: UserStats = { atcoder: ratingOnlyStats, leetcode: EMPTY_LEETCODE };
-            const weaknesses = detectWeaknesses(userStatsWithEmptyLc);
-            const weeklyPlan = generateWeeklyPlan(userStatsWithEmptyLc, weaknesses);
-            const label = diagnosisLabel(rating, EMPTY_LEETCODE);
-
-            atcoderPrecomputed = {
-              atcoderUserStats: ratingOnlyStats,
-              weaknesses,
-              levelLabel: label,
-              nextProblems: [],
-              weeklyPlan,
-              ratingNotFound: ratingOnly.provisional,
-            };
-          } else if (!leetcodeId.trim()) {
-            setError(
-              "AtCoder のデータ取得に失敗しました。AtCoder Problems API（kenkoooo.com）が一時的に応答していません。LeetCode ID も入力して再試行するか、しばらく時間をおいてからお試しください。"
-            );
-            return;
-          } else {
-            setRatingWarning("AtCoder のデータ取得に失敗しました。LeetCode のみで分析します。");
-          }
-        }
-      }
-
-      // --- Step 2: LeetCode + Claude はサーバー側で処理 ---
-      advanceStep(2);
-
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          atcoderId: atcoderId.trim(),
-          leetcodeId: leetcodeId.trim(),
-          previousResult,
-          doneProblems,
-          atcoderPrecomputed,
-        }),
-      });
-
-      advanceStep(3);
-      const data = await res.json();
-
-      if (!data.success) {
-        setError(data.error ?? "エラーが発生しました");
-        return;
-      }
-
-      sessionStorage.setItem("cpcoach_result", JSON.stringify(data.data));
-      sessionStorage.setItem("cpcoach_ids", JSON.stringify({ atcoderId, leetcodeId }));
-      router.push("/result");
-    } catch {
-      setError("通信エラーが発生しました。しばらくしてから再試行してください。");
-    } finally {
+    if (!outcome.ok) {
+      setError(outcome.error);
       setLoading(false);
+      return;
     }
+
+    sessionStorage.setItem("cpcoach_result", JSON.stringify(outcome.data));
+    sessionStorage.setItem(
+      "cpcoach_ids",
+      JSON.stringify({ atcoderId, leetcodeId })
+    );
+    router.push("/result");
   }
 
   return (

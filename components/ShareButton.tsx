@@ -2,7 +2,18 @@
 import { useState } from "react";
 import type { DiagnosisResult } from "@/types";
 
-function buildTweet(result: DiagnosisResult, origin: string) {
+function buildShareUrl(
+  origin: string,
+  ids?: { atcoderId: string; leetcodeId: string }
+) {
+  if (!ids || (!ids.atcoderId && !ids.leetcodeId)) return origin;
+  const params = new URLSearchParams();
+  if (ids.atcoderId) params.set("a", ids.atcoderId);
+  if (ids.leetcodeId) params.set("l", ids.leetcodeId);
+  return `${origin}/result?${params.toString()}`;
+}
+
+function buildTweet(result: DiagnosisResult, shareUrl: string) {
   const topWeakness = result.weaknesses[0]?.tag ?? "なし";
   const problemCount = result.nextProblems.length;
   const lines = [
@@ -12,26 +23,34 @@ function buildTweet(result: DiagnosisResult, origin: string) {
     `💪 重点強化分野: ${topWeakness}`,
     `📋 次の${problemCount}問でステップアップ予定！`,
     "",
-    `${origin} #競プロ #AtCoder #LeetCode`,
+    `${shareUrl} #競プロ #AtCoder #LeetCode`,
   ];
   return lines.join("\n");
 }
 
-export function ShareButton({ result }: { result: DiagnosisResult }) {
+export function ShareButton({
+  result,
+  ids,
+}: {
+  result: DiagnosisResult;
+  ids?: { atcoderId: string; leetcodeId: string };
+}) {
   const [copied, setCopied] = useState(false);
 
-  const handleTweet = () => {
+  const getText = () => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const text = buildTweet(result, origin);
+    return buildTweet(result, buildShareUrl(origin, ids));
+  };
+
+  const handleTweet = () => {
+    const text = getText();
     const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
   const handleCopy = async () => {
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const text = buildTweet(result, origin);
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(getText());
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
