@@ -7,6 +7,7 @@ import { WeaknessCard } from "@/components/WeaknessCard";
 import { NextProblemsCard } from "@/components/NextProblemsCard";
 import { WeeklyPlanCard } from "@/components/WeeklyPlanCard";
 import { ComparisonCard, HistoryPanel } from "@/components/HistoryPanel";
+import { ShareButton } from "@/components/ShareButton";
 import { saveToHistory, loadHistory, clearHistory } from "@/lib/storage";
 
 export default function ResultPage() {
@@ -68,6 +69,7 @@ export default function ResultPage() {
         <WeaknessCard weaknesses={result.weaknesses} />
         <NextProblemsCard problems={result.nextProblems} />
         <WeeklyPlanCard plan={result.weeklyPlan} />
+        <ShareButton result={result} />
 
         {/* 前回比較（2回目以降の診断で表示） */}
         {prevEntry && <ComparisonCard prev={prevEntry} curr={result} />}
